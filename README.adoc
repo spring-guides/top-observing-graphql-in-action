@@ -1,0 +1,1179 @@
+---
+tags: [graphql, observability]
+projects: [spring-boot, spring-graphql]
+---
+:toc:
+:icons: font
+:source-highlighter: prettify
+:project_id: top-observing-graphql-in-action
+
+== What You Will Build
+
+You will build a service that will accept GraphQL requests at `http://localhost:8080/graphql`, backed by a MongoDB data store.
+We will be using metrics and traces to better understand how our application behaves at runtime.
+
+
+== Observing GraphQL in action
+
+There are many ways to build APIs for the Web; developing REST-like services with Spring MVC or Spring WebFlux is a very popular choice.
+For your web application, maybe you would like:
+
+* more flexibility with how much information is returned by endpoints
+* to use a schema with strong typing to help with API consumption (by mobile or React apps, for example)
+* to expose highly connected, graph-like data
+
+GraphQL APIs can help you solve these use cases and https://spring.io/projects/spring-graphql[Spring for GraphQL] provides a familiar programming model for your applications.
+
+This guide walks you through the process of creating a GraphQL service in Java using Spring for GraphQL.
+We will start with some GraphQL concepts and build an API for exploring a music library with pagination and Observability support.
+
+
+
+## A short introduction to GraphQL
+
+GraphQL is a query language to retrieve data from a server.
+Here, we will consider building an API for accessing a music library.
+
+With some JSON Web APIs, you could use the following pattern to get information about an Album and its Tracks.
+First, getting the Album information from the `http://localhost:8080/albums/{id}` endpoint with its identifier,
+like `GET http://localhost:8080/albums/339`:
+
+[source,json]
+----
+{
+    "id": 339,
+    "name": "Greatest hits",
+    "artist": {
+        "id": 339,
+        "name": "The Spring team"
+      },
+    "releaseDate": "2005-12-23",
+    "ean": "9294950127462",
+    "genres": ["Coding music"],
+    "trackCount": "10",
+    "trackIds": [1265, 1266, 1267, 1268, 1269, 1270, 1271, 1272, 1273, 1274]
+}
+----
+
+Then, getting information about each track for this album by calling the tracks endpoint with each track identifier,
+ `GET http://localhost:8080/tracks/1265`:
+
+[source,json]
+----
+{
+  "id": 1265,
+  "title": "Spring music",
+  "number": 1,
+  "duration": 128,
+  "artist": {
+    "id": 339,
+    "name": "The Spring team"
+  },
+  "album": {
+    "id": 339,
+    "name": "Greatest hits",
+    "trackCount": "14"
+  },
+  "lyrics": "https://example.com/lyrics/the-spring-team/spring-music.txt"
+}
+----
+
+Designing this API is all about tradeoffs: how much information should we provide for each endpoint, what about navigating relationships?
+Project like https://spring.io/projects/spring-data-rest[Spring Data REST] offer different alternatives to such problems.
+
+On the other hand, with a GraphQL API, we can send a GraphQL document to a single endpoint like `POST http://localhost:8080/graphql`:
+
+[source,graphql]
+----
+query albumDetails {
+  albumById(id: "339") {
+    name
+    releaseDate
+    tracks {
+      id
+      title
+      duration
+    }
+  }
+}
+----
+
+This GraphQL request says:
+
+* perform a query for an album with id "339"
+* for the album type, return its name and releaseDate
+* for each track of this album, return its id, title and duration
+
+The response is in JSON, for example:
+
+[source,json]
+----
+{
+  "albumById": {
+    "name": "Greatest hits",
+    "releaseDate": "2005-12-23",
+    "tracks": [
+      {"id": 1265, "title": "Spring music", "duration": 128},
+      {"id": 1266, "title": "GraphQL apps", "duration": 132}
+    ]
+  }
+}
+----
+
+GraphQL provides three important things:
+
+1. a Schema Definition Language (SDL) that you can use to write the schema of your GraphQL API. This schema is statically typed, so the server knows exactly what types of objects requests can query and what fields those objects contain.
+2. a Domain Specific Language for describing what the client wants to query or mutate; this is sent as a document to the server.
+3. an engine that parses, validates and executes incoming requests, distributing them to "Data Fetchers" to get the relevant data.
+
+You can learn more about GraphQL in general, which works with many programming languages, on its https://graphql.org/learn/[official page].
+
+
+== What You Need
+
+* A favorite text editor or IDE
+* https://bell-sw.com/pages/downloads/#jdk-17-lts[Java 17^] or later
+* A local https://docs.docker.com/desktop/[docker installation] is required to run containers during development: this application uses https://docs.spring.io/spring-boot/docs/current/reference/html/features.html#features.docker-compose[Spring Boot's docker compose support] to start external services at development time.
+
+
+== Starting with the initial project
+
+This project has been created on https://start.spring.io with the *Spring for GraphQL*, *Spring Web*, *Spring Data MongoDB*, *Spring Boot Devtools* and *Docker Compose Support* dependencies.
+It also contains classes that generate random seed data to work with our application.
+
+Once the docker daemon is running on your machine, you can first run the project in your IDE or by using `./gradlew :bootRun` on the command line.
+You should see logs showing that a Mongo DB image has been downloaded and a new container has been created before our application starts:
+
+[source]
+----
+INFO 72318 --- [utReader-stderr] o.s.boot.docker.compose.core.DockerCli   :  mongo Pulling
+...
+INFO 72318 --- [utReader-stderr] o.s.boot.docker.compose.core.DockerCli   :  406b5efbdb81 Pull complete
+...
+INFO 72318 --- [utReader-stderr] o.s.boot.docker.compose.core.DockerCli   :  Container initial-mongo-1  Healthy
+INFO 72318 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data MongoDB repositories in DEFAULT mode.
+INFO 72318 --- [  restartedMain] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 193 ms. Found 2 MongoDB repository interfaces.
+...
+INFO 72318 --- [  restartedMain] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat initialized with port 8080 (http)
+...
+INFO 72318 --- [  restartedMain] i.s.g.g.GraphqlMusicApplication          : Started GraphqlMusicApplication in 36.601 seconds (process running for 37.244)
+----
+
+You should also see random data being generated and saved to the datastore during startup:
+
+[source]
+----
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e300', title='Zero and One', genres=[K-Pop (Korean Pop)], artists=[Artist{id='6601e06f454bc9438702e2f6', name='Code Culture'}], releaseDate=2010-02-07, ean='9317657099044', trackIds=[6601e06f454bc9438702e305, 6601e06f454bc9438702e306, 6601e06f454bc9438702e307, 6601e06f454bc9438702e308, 6601e06f454bc9438702e301, 6601e06f454bc9438702e302, 6601e06f454bc9438702e303, 6601e06f454bc9438702e304]}
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e309', title='Hello World', genres=[Country], artists=[Artist{id='6601e06f454bc9438702e2f6', name='Code Culture'}], releaseDate=2016-07-21, ean='8864328013898', trackIds=[6601e06f454bc9438702e30e, 6601e06f454bc9438702e30f, 6601e06f454bc9438702e30a, 6601e06f454bc9438702e312, 6601e06f454bc9438702e30b, 6601e06f454bc9438702e30c, 6601e06f454bc9438702e30d, 6601e06f454bc9438702e310, 6601e06f454bc9438702e311]}
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e314', title='808s and Heartbreak', genres=[Folk], artists=[Artist{id='6601e06f454bc9438702e313', name='Virtual Orchestra'}], releaseDate=2016-02-19, ean='0140055845789', trackIds=[6601e06f454bc9438702e316, 6601e06f454bc9438702e317, 6601e06f454bc9438702e318, 6601e06f454bc9438702e319, 6601e06f454bc9438702e31b, 6601e06f454bc9438702e31c, 6601e06f454bc9438702e31d, 6601e06f454bc9438702e315, 6601e06f454bc9438702e31a]}
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e31e', title='Noise Floor', genres=[Classical], artists=[Artist{id='6601e06f454bc9438702e313', name='Virtual Orchestra'}], releaseDate=2005-01-06, ean='0913755396673', trackIds=[6601e06f454bc9438702e31f, 6601e06f454bc9438702e327, 6601e06f454bc9438702e328, 6601e06f454bc9438702e323, 6601e06f454bc9438702e324, 6601e06f454bc9438702e325, 6601e06f454bc9438702e326, 6601e06f454bc9438702e320, 6601e06f454bc9438702e321, 6601e06f454bc9438702e322]}
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e329', title='Language Barrier', genres=[EDM (Electronic Dance Music)], artists=[Artist{id='6601e06f454bc9438702e313', name='Virtual Orchestra'}], releaseDate=2017-07-19, ean='7701504912761', trackIds=[6601e06f454bc9438702e32c, 6601e06f454bc9438702e32d, 6601e06f454bc9438702e32e, 6601e06f454bc9438702e32f, 6601e06f454bc9438702e330, 6601e06f454bc9438702e331, 6601e06f454bc9438702e32a, 6601e06f454bc9438702e332, 6601e06f454bc9438702e32b]}
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Playlist{id='6601e06f454bc9438702e333', name='Favorites', author='rstoyanchev'}
+INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Playlist{id='6601e06f454bc9438702e334', name='Favorites', author='bclozel'}
+----
+
+
+We are now ready to start implementing our music library API: first, defining a GraphQL schema and then implementing the logic to fetch data requested by clients.
+
+
+== Fetching an Album
+
+First, add a new file `schema.graphqls` to the `src/main/resources/graphql` folder with the following content:
+
+[source,graphql]
+----
+type Query {
+    """
+    Get a particular Album by its ID.
+    """
+    album(id: ID!): Album
+}
+
+"""
+An Album.
+"""
+type Album {
+    id: ID!
+    "The Album title."
+    title: String!
+    "The list of music genres for this Album."
+    genres: [String]
+    "The list of Artists who authored this Album."
+    artists: [Artist]
+    "The EAN for this Album."
+    ean: String
+}
+
+"""
+Person or group featured on a Track, or authored an Album.
+"""
+type Artist {
+    id: ID!
+    "The Artist name."
+    name: String
+    "The Albums this Artist authored."
+    albums: [Album]
+}
+----
+
+This schema describes the types and operations our GraphQL API will expose: the `Artist` and `Album` types, and the `album` Query operation.
+Each type is composed of fields that can be represented by another type defined by the schema, or a "scalar" type that points to a concrete piece of data (like `String`, `Boolean`, `Int`...).
+You can https://graphql.org/learn/schema/[learn more about GraphQL schemas and types in the official GraphQL documentation].
+
+Designing the schema is a critical part of the process - our clients will rely on this heavily to use our API.
+You can easily try your API thanks to https://github.com/graphql/graphiql#graphiql[GraphiQL], a web-based UI that lets you explore the schema and query your API.
+Enable the GraphiQL UI in your application by configuring the following in `application.properties`:
+
+[source,properties]
+----
+spring.graphql.graphiql.enabled=true
+----
+
+You can now start your application. Before we explore our schema with GraphiQL, you should have seen in the CONSOLE the following logs:
+
+[source]
+----
+INFO 65464 --- [  restartedMain] o.s.b.a.g.GraphQlAutoConfiguration       : GraphQL schema inspection:
+	Unmapped fields: {Query=[album]}
+	Unmapped registrations: {}
+	Skipped types: []
+----
+
+Because the schema is well-defined and strictly typed, Spring for GraphQL can inspect your schema and your application to let you know about discrepancies.
+Here, the inspection tells us that the `album` query is not implemented in our application.
+
+Let's add now the following class to our application:
+
+[source,java]
+----
+package io.spring.guides.graphqlmusic.tracks;
+
+import java.util.Optional;
+
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.graphql.data.method.annotation.Argument;
+import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.stereotype.Controller;
+
+import static org.springframework.data.mongodb.core.query.Criteria.where;
+import static org.springframework.data.mongodb.core.query.Query.query;
+
+@Controller
+public class TracksController {
+
+    private final MongoTemplate mongoTemplate;
+
+    public TracksController(MongoTemplate mongoTemplate) {
+        this.mongoTemplate = mongoTemplate;
+    }
+
+    @QueryMapping
+    public Optional<Album> album(@Argument String id) {
+        return this.mongoTemplate.query(Album.class)
+                .matching(query(where("id").is(id)))
+                .first();
+    }
+
+}
+----
+
+Implementing our GraphQL API can be quite similar to working on REST services with Spring MVC.
+We contribute `@Controller` annotated components and define handler methods that will be responsible for fulfilling parts of the schema.
+
+Our controller implements a method named `album` annotated with `@QueryMapping`.
+Spring for GraphQL will use this method to fetch the album data and fulfill the request.
+Here, we are using a `MongoTemplate`  to query our MongoDB index and fetch the relevant data.
+
+
+Now, navigate to http://localhost:8080/graphiql.
+At the top left of the window, you should see a book icon that lets you open the documentation explorer.
+As you can see, the schema and its inline documentation are rendered as navigable documentation.
+The schema really is the key contract with our GraphQL API users.
+
+.Sending an "album" query with GraphiQL
+image::./images/graphiql-album-query.png
+
+Choose an album id in the startup logs of your application and use it to send a query with GraphiQL.
+Paste the following query in the left panel and execute the query.
+
+[source,graphql]
+----
+query {
+  album(id: "659bcbdc7ed081085697ba3d") {
+    title
+	genres
+    ean
+  }
+}
+----
+
+The GraphQL engine receives our document, parses its content and validates its syntax and then dispatches calls to all registered data fetchers.
+Here, our `album` controller method will be used to fetch the `Album` instance of id `"659bcbdc7ed081085697ba3d"`.
+All the requested fields will be loaded by property data fetchers that graphql-java supports automatically.
+
+You should get the requested data in the panel on the right.
+
+[source,json]
+----
+{
+  "data": {
+    "album": {
+      "title": "Artificial Intelligence",
+      "genres": [
+        "Indie Rock"
+      ],
+      "ean": "5037185097254"
+    }
+  }
+}
+----
+
+
+Spring for GraphQL supports an annotation model that we can use to automatically register our controller methods as data fetchers in the GraphQL engine.
+The annotation type (there are several), the method name, method parameters and return types are all used to understand the intent and register the controller method accordingly.
+We will use this model more extensively in the next sections of this tutorial.
+
+If you want to learn more about the `@Controller` method signatures right now, check out https://docs.spring.io/spring-graphql/reference/controllers.html[the dedicated section in the Spring for GraphQL reference documentation].
+
+
+== Defining custom Scalars
+
+Let's have another look at our existing `Album` class.
+You will notice that the field `releaseDate` is of type `java.time.LocalDate`, a type that is unknown to GraphQL and that we would like to expose in our schema.
+Here, we will declare custom scalar types in our schema and provide the code that will map the data from its scalar representation to its `java.time.LocalDate` form, and vice versa.
+
+First, add the following scalar definitions to the `src/main/resources/graphql/schema.graphqls`:
+
+[source,graphql]
+----
+scalar Date @specifiedBy(url:"https://tools.ietf.org/html/rfc3339")
+
+scalar Url @specifiedBy(url:"https://www.w3.org/Addressing/URL/url-spec.txt")
+
+"""
+A duration, in seconds.
+"""
+scalar Duration
+----
+
+Scalars are basic types that your schema can compose to describe complex types.
+Some Scalars are provided by the GraphQL language itself, but you can also define your own or reuse some provided by libraries.
+Because scalars are part of our schema, we should define them precisely, ideally pointing to a specification.
+
+For our application, we will use the `Date` and `Url` Scalars provided by the GraphQL Java `graphql-java-extended-scalars` library.
+First, we will need to add it as a dependency to our project:
+
+[source,groovy]
+----
+implementation 'com.graphql-java:graphql-java-extended-scalars:22.0'
+----
+
+Our application already contains a `DurationSecondsScalar` implementation that shows how you can implement a custom Scalar for `Duration`.
+Scalars need to be registered against the GraphQL engine in our application as they are needed when the GraphQL schema is wired together with the application.
+During that phase, we will need all the information about the types, scalars and the data fetchers.
+Because of the type-safe nature of the schema, the application will fail if we use scalar definitions in the schema that are unknown to the GraphQL engine.
+
+We can contribute a `RuntimeWiringConfigurer` bean that registers our Scalars:
+
+[source,java]
+----
+package io.spring.guides.graphqlmusic;
+
+import graphql.scalars.ExtendedScalars;
+import io.spring.guides.graphqlmusic.support.DurationSecondsScalar;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.graphql.execution.RuntimeWiringConfigurer;
+
+@Configuration
+public class GraphQlConfiguration {
+
+    @Bean
+    public RuntimeWiringConfigurer runtimeWiringConfigurer() {
+        return wiringBuilder -> wiringBuilder.scalar(ExtendedScalars.Date)
+                .scalar(ExtendedScalars.Url)
+                .scalar(DurationSecondsScalar.INSTANCE);
+    }
+
+}
+----
+
+We can now improve our schema and declare the `releaseDate` field for our `Album` type:
+
+[source,graphql]
+----
+"""
+An Album.
+"""
+type Album {
+    id: ID!
+    "The Album title."
+    title: String!
+    "The list of music genres for this Album."
+    genres: [String]
+    "The list of Artists who authored this Album."
+    artists: [Artist]
+    "The release date for this Album."
+    releaseDate: Date
+    "The EAN for this Album."
+    ean: String
+}
+----
+
+And query that information for a given Album:
+
+[source,graphql]
+----
+query {
+  album(id: "659c342e11128b11e08aa115") {
+    title
+    genres
+    releaseDate
+    ean
+  }
+}
+----
+
+As expected, the release date information will be serialized with the date format we implemented by the `Date` Scalar.
+
+[source,json]
+----
+{
+  "data": {
+    "album": {
+      "title": "Assembly Language",
+      "genres": [
+        "Folk"
+      ],
+      "releaseDate": "2015-08-07",
+      "ean": "8879892829172"
+    }
+  }
+}
+----
+
+Unlike REST over HTTP, a single GraphQL request can contain many operations.
+This means that unlike Spring MVC, a single GraphQL operation can involve the execution of multiple `@Controller` methods.
+Because the GraphQL engine dispatches all those calls internally, it can be hard to see concretely what happens in our application.
+In the next section, we will use Observability features to better understand what happens under the hood.
+
+
+== Enable Observations
+
+With Spring Boot 3.0 and Spring Framework 6.0, the Spring team has completely revisited the Observability story in Spring applications.
+Observability is now built-in Spring libraries, providing you with metrics and traces for Spring MVC requests, Spring Batch jobs, Spring Security infrastructure, etc.
+
+Observations are recorded at runtime and can produce metrics and traces depending on the application configuration.
+They are generally used for investigating production and performance issues in distributed systems.
+Here, we are going to use them to visualize how GraphQL requests are handled and data fetching operations distributed.
+
+First, let's add *Spring Boot Actuator*, *Micrometer Tracing* and *Zipkin* to our `build.gradle`:
+
+[source,groovy]
+----
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+	implementation 'io.micrometer:micrometer-tracing-bridge-brave'
+	implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+----
+
+We will also need to update our `compose.yaml` file to also create a new Zipkin container to collect the recorded traces:
+
+[source,yaml]
+----
+services:
+  mongodb:
+    image: 'mongo:latest'
+    environment:
+      - 'MONGO_INITDB_DATABASE=mydatabase'
+      - 'MONGO_INITDB_ROOT_PASSWORD=secret'
+      - 'MONGO_INITDB_ROOT_USERNAME=root'
+    ports:
+      - '27017'
+  zipkin:
+    image: 'openzipkin/zipkin:latest'
+    ports:
+      - '9411:9411'
+----
+
+
+By design, Traces are not systematically recorded for all requests.
+For this lab, we will change the sampling probability to "1.0" to visualize all requests.
+In our `application.properties`, add the following:
+
+[source,properties]
+----
+management.tracing.sampling.probability=1.0
+----
+
+Now, refresh the GraphiQL UI page and then fetch an album like previously.
+You can now load the Zipkin UI in your browser at http://localhost:9411/zipkin/ and hit the "Run query" button.
+You should then see two traces; by default, they are ordered by duration.
+All traces start with an `"http post /graphql"` span, which is expected: all our GraphQL queries will use the HTTP transport with POST requests on the `"/graphql"` endpoint.
+
+First, click on the trace that contains 2 spans. This trace is composed of:
+
+1. a span for the HTTP request received by our server on the `"/graphql"` endpoint
+2. a span for the GraphQL request itself, which is tagged as a `IntrospectionQuery`
+
+The GraphiQL UI, when loaded, fires an "introspection query" that asks for the GraphQL schema and all available metadata.
+With this information, it will help us explore the schema and even auto-complete our queries.
+
+Now, click on the trace that contains 3 spans. This trace is composed of:
+
+1. a span for the HTTP request received by our server on the `"/graphql"` endpoint
+2. a span for the GraphQL request itself, which is tagged as a `MyQuery`
+3. a third span `graphql field album` that shows the GraphQL engine using our data fetcher to get the album information
+
+.Zipkin trace for an "album" query
+image::./images/zipkin-album-query.png
+
+In the next section, we are going to add more features to our application and see how more complex queries are reflected as traces.
+
+
+## Add basic Track information
+
+So far, we have implemented a simple query using a single data fetcher.
+But as we have seen, GraphQL is all about navigating a graph-like data structure and requesting different parts of it.
+Here, we are going to add the ability to get the information about album tracks.
+
+First, we should add the `tracks` field to our `Album` type and the `Track` type to our existing `schema.graphqls`:
+
+[source,graphql]
+----
+"""
+An Album.
+"""
+type Album {
+    id: ID!
+    "The Album title."
+    title: String!
+    "The list of music genres for this Album."
+    genres: [String]
+    "The list of Artists who authored this Album."
+    artists: [Artist]
+    "The release date for this Album."
+    releaseDate: Date
+    "The EAN for this Album."
+    ean: String
+    "The collection of Tracks this Album is made of."
+    tracks: [Track]
+}
+
+"""
+A song in a particular Album.
+"""
+type Track {
+ id: ID!
+ "The track number in the corresponding Album."
+ number: Int
+ "The track title."
+ title: String!
+ "The track duration."
+ duration: Duration
+ "Average user rating for this Track."
+ rating: Int
+}
+----
+
+We then need to have a way to fetch the track entities from our database for a given album and order them by the track number.
+Let's do this by adding the `findByAlbumIdOrderByNumber` method to our `TrackRepository` interface:
+
+[source,java]
+----
+public interface TrackRepository extends MongoRepository<Track, String> {
+
+    List<Track> findByAlbumIdOrderByNumber(String albumId);
+
+}
+----
+
+We now need to give the GraphQL engine a way to fetch the track information for a given album instance.
+This can be done with the `@SchemaMapping` annotation by adding the `tracks` method to the `TracksController`:
+
+[source,java]
+----
+@Controller
+public class TracksController {
+
+    private final MongoTemplate mongoTemplate;
+
+    private final TrackRepository trackRepository;
+
+    public TracksController(MongoTemplate mongoTemplate, TrackRepository trackRepository) {
+        this.mongoTemplate = mongoTemplate;
+        this.trackRepository = trackRepository;
+    }
+
+    @QueryMapping
+    public Optional<Album> album(@Argument String id) {
+        return this.mongoTemplate.query(Album.class)
+                .matching(query(where("id").is(id)))
+                .first();
+    }
+
+    @SchemaMapping
+    public List<Track> tracks(Album album) {
+        return this.trackRepository.findByAlbumIdOrderByNumber(album.getId());
+    }
+}
+----
+
+All GraphQL `@*Mapping` annotations are actually variants of the `@SchemaMapping` one.
+This annotation indicates that a controller method is responsible for fetching data for a particular field on a particular type:
+* the parent type information is derived from the type name of the method argument, here `Album`.
+* the field name is detected by looking at the controller method name, here `tracks`.
+
+The annotation itself allows you to specify manually this information in attributes, in case the method name or type name do not match your schema:
+
+[source,java]
+----
+    @SchemaMapping(field="tracks", typeName = "Album")
+    public List<Track> fetchTracks(Album album) {
+        //...
+    }
+----
+
+Our `@QueryMapping` annotated `album` method is also a variant of `@SchemaMapping`.
+Here, we are considering the `album` field by its parent type is `Query`.
+`Query` is a reserved type in which GraphQL stores all queries for our GraphQL API.
+We could modify our `album` controller method with the following and still get the same result:
+
+[source,java]
+----
+    @SchemaMapping(field="album", typeName = "Query")
+    public Optional<Album> fetchAlbum(@Argument String id) {
+        //...
+    }
+----
+
+Our controller method declarations are not about mapping HTTP requests to methods, but really about describing how to fetch fields from our schema.
+
+Now let's see this in action with the following query, this time fetching information about album tracks:
+
+[source,graphql]
+----
+query MyQuery {
+  album(id: "65e995e180660661697f4413") {
+    title
+    ean
+    releaseDate
+    tracks {
+      title
+      duration
+      number
+    }
+  }
+}
+----
+
+You should get a result similar to this:
+
+[source,json]
+----
+{
+  "data": {
+    "album": {
+      "title": "System Shock",
+      "ean": "5125589069110",
+      "releaseDate": "2006-02-25",
+      "tracks": [
+        {
+          "title": "The Code Contender",
+          "duration": 177,
+          "number": 1
+        },
+        {
+          "title": "The Code Challenger",
+          "duration": 151,
+          "number": 2
+        },
+        {
+          "title": "The Algorithmic Beat",
+          "duration": 189,
+          "number": 3
+        },
+        {
+          "title": "Springtime in the Rockies",
+          "duration": 182,
+          "number": 4
+        },
+        {
+          "title": "Spring Is Coming",
+          "duration": 192,
+          "number": 5
+        },
+        {
+          "title": "The Networker's Lament",
+          "duration": 190,
+          "number": 6
+        },
+        {
+          "title": "Spring Affair",
+          "duration": 166,
+          "number": 7
+        }
+      ]
+    }
+  }
+}
+----
+
+We should now see a trace with 4 spans, 2 of them with our `album` and `tracks` data fetchers.
+
+.Zipkin trace for an "album and tracks" query
+image::./images/zipkin-album-tracks-query.png
+
+
+== Testing GraphQL Controllers
+
+Testing your code is an important part of the development lifecycle.
+Applications should not rely on full integration tests, and we should test our controllers without involving the entire schema or a live server.
+
+GraphQL is commonly used on top of HTTP, but the technology itself is "transport-agnostic", meaning it's not tied to HTTP and can work on top of many transports.
+For example, you can run Spring for GraphQL applications using HTTP, WebSocket or RSocket.
+
+Let's now implement favorite songs support: each user of our application can create a custom playlist of their favorite tracks.
+First, we can declare the `Playlist` type in our schema and a new `favoritePlaylist` query method that shows the favorite tracks for a given user.
+
+
+[source,graphql]
+----
+"""
+A named collection of tracks, curated by a user.
+"""
+type Playlist {
+    id : ID!
+    "The playlist name."
+    name: String
+    "The user name of the author of this playlist."
+    author: String
+}
+----
+
+[source,graphql]
+----
+type Query {
+    """
+    Get a particular Album by its ID.
+    """
+    album(id: ID!): Album
+    
+    """
+    Get favorite tracks published by a particular user.
+    """
+    favoritePlaylist(
+        "The Playlist author username."
+        authorName: String!): Playlist
+
+}
+----
+
+Now create the `PlaylistController` and implement the query as followed:
+
+[source,java]
+----
+package io.spring.guides.graphqlmusic.tracks;
+
+import org.springframework.graphql.data.method.annotation.Argument;
+import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.stereotype.Controller;
+
+import java.util.Optional;
+
+@Controller
+public class PlaylistController {
+
+ private final PlaylistRepository playlistRepository;
+
+ public PlaylistController(PlaylistRepository playlistRepository) {
+  this.playlistRepository = playlistRepository;
+ }
+
+ @QueryMapping
+ public Optional<Playlist> favoritePlaylist(@Argument String authorName) {
+  return this.playlistRepository.findByAuthorAndNameEquals(authorName, "Favorites");
+ }
+
+}
+----
+
+Spring for GraphQL provides testing utilities called "testers" that will act as clients and help you to perform assertions on the returned responses.
+The required dependency `'org.springframework.graphql:spring-graphql-test'` is already on our classpath, so let's write our first test.
+
+The https://docs.spring.io/spring-boot/docs/current/reference/html/features.html#features.testing.spring-boot-applications.spring-graphql-tests[Spring Boot `@GraphQlTest` test slice] will help set up lightweight integration tests that only involve the relevant parts of our infrastructure.
+
+Here, we will declare our test class as a `@GraphQlTest` that will test the `PlaylistController`.
+We will also need to involve our `GraphQlConfiguration` class that defines our custom scalars needed for our schema.
+
+Spring Boot will auto-configure for us a `GraphQlTester` instance that we can use against our schema to test the `favoritePlaylist` query.
+Because this is not a full integration test with a live server, database connections and all other components, it is our job to mock the missing components for our Controller.
+Our test mocks the expected behavior of our `PlaylistRepository` as we declare it as a `@MockBean`.
+
+[source,java]
+----
+package io.spring.guides.graphqlmusic.tracks;
+
+
+import io.spring.guides.graphqlmusic.GraphQlConfiguration;
+import org.junit.jupiter.api.Test;
+import org.mockito.BDDMockito;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.graphql.GraphQlTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.context.annotation.Import;
+import org.springframework.graphql.test.tester.GraphQlTester;
+
+import java.util.Optional;
+
+@GraphQlTest(controllers = PlaylistController.class)
+@Import(GraphQlConfiguration.class)
+class PlaylistControllerTests {
+
+ @Autowired
+ private GraphQlTester graphQlTester;
+
+ @MockBean
+ private PlaylistRepository playlistRepository;
+
+ @Test
+ void shouldReplyWithFavoritePlaylist() {
+  Playlist favorites = new Playlist("Favorites", "bclozel");
+  favorites.setId("favorites");
+
+  BDDMockito.when(playlistRepository.findByAuthorAndNameEquals("bclozel", "Favorites")).thenReturn(Optional.of(favorites));
+
+  graphQlTester.document("""
+                  {
+                    favoritePlaylist(authorName: "bclozel") {
+                      id
+                      name
+                      author
+                    }
+                  }
+                  """)
+          .execute()
+          .path("favoritePlaylist.name").entity(String.class).isEqualTo("Favorites");
+ }
+
+}
+
+----
+
+As you can see, the `GraphQlTester` lets you send GraphQL documents and perform assertions against the GraphQL response.
+You'll find https://docs.spring.io/spring-graphql/reference/testing.html[more information about the tester in the Spring for GraphQL reference documentation].
+
+
+== Pagination
+
+In the previous section, we have defined a query for fetching the favorite songs of our users. But the `Playlist` type does not contain so far any track information.
+We could add a `tracks: [Track]` property to the `Playlist` type, but unlike Albums where the number of tracks is somewhat limited, our users can choose to add a large number of songs as favorites.
+
+The GraphQL community created a https://relay.dev/graphql/connections.htm[Connections specification] that implements all the best practices for the pagination pattern in GraphQL APIs.
+Spring for GraphQL supports this specification and helps you implement pagination on top of different data store technologies.
+
+First, we need to update our `Playlist` type in order to expose track information. Here, the `tracks` property will not return a full list of `Track` instances, but rather a `TrackConnection` type.
+
+[source,graphql]
+----
+"""
+A named collection of tracks, curated by a user.
+"""
+type Playlist {
+    id : ID!
+    "The playlist name."
+    name: String
+    "The user name of the author of this playlist."
+    author: String
+    tracks(
+        "Returns the first n elements from the list."
+        first: Int,
+        "Returns the last n elements from the list."
+        last: Int,
+        "Returns the elements in the list that come before the specified cursor."
+        before: String,
+        "Returns the elements in the list that come after the specified cursor."
+        after: String): TrackConnection
+}
+----
+
+The `TrackConnection` type should be described in the schema. Per specification, the connection type should contain information about the current page, as well as the actual edges of the graph.
+Each edge points to a node (an actual `Track` element) and contains the cursor information, which is an opaque string that points to a particular position in the collection.
+
+This information needs to be repeated for each `Connection` type in our schema and doesn't bring additional semantics to our application.
+This is why this part is automatically contributed to the schema at runtime by Spring for GraphQL, so no need to add this to your schema file:
+
+[source,graphql]
+----
+type TrackConnection {
+	edges: [TrackEdge]!
+	pageInfo: PageInfo!
+}
+
+type TrackEdge {
+	node: Track!
+	cursor: String!
+}
+
+type PageInfo {
+	hasPreviousPage: Boolean!
+	hasNextPage: Boolean!
+	startCursor: String
+	endCursor: String
+}
+----
+
+The `tracks(first: Int, last: Int, before: String, after: String)` contract can be used in two ways:
+
+1. paginating forward, by getting the `first` 10 elements `after` the element with cursor "somevalue"
+2. paginating backwards, by getting the `last` 10 elements `before` the element with cursor "somevalue"
+
+This means that GraphQL clients will ask for a "page" of elements by providing a position in an ordered collection, a direction and a count.
+https://docs.spring.io/spring-data/rest/reference/data-commons/repositories/scrolling.html#page-title[Spring Data supports scrolling] with both offsets and keyset strategies.
+
+Let's add a new method to our `TrackRepository` that supports pagination for our use case:
+
+[source,java]
+----
+package io.spring.guides.graphqlmusic.tracks;
+
+import java.util.List;
+import java.util.Set;
+
+import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.ScrollPosition;
+import org.springframework.data.domain.Window;
+import org.springframework.data.mongodb.repository.MongoRepository;
+
+public interface TrackRepository extends MongoRepository<Track, String> {
+
+    List<Track> findByAlbumIdOrderByNumber(String albumId);
+
+    Window<Track> findByIdInOrderByTitle(Set<String> trackIds, ScrollPosition scrollPosition, Limit limit);
+
+}
+----
+
+Our method will "find" tracks that match ids listed in the given set, ordered by their title.
+The `ScrollPosition` contains the position and direction and the `Limit` argument is the element count.
+We are getting a `Window<Track>` from this method as a way to access the elements and paginate.
+
+Let's now update our `PlaylistController` to add a `@SchemaMapping` that fetches `Tracks` for a given `Playlist`.
+
+[source,java]
+----
+package io.spring.guides.graphqlmusic.tracks;
+
+import org.springframework.data.domain.Limit;
+import org.springframework.data.domain.ScrollPosition;
+import org.springframework.data.domain.Window;
+import org.springframework.graphql.data.method.annotation.Argument;
+import org.springframework.graphql.data.method.annotation.QueryMapping;
+import org.springframework.graphql.data.method.annotation.SchemaMapping;
+import org.springframework.graphql.data.query.ScrollSubrange;
+import org.springframework.stereotype.Controller;
+
+import java.util.Optional;
+import java.util.Set;
+
+@Controller
+public class PlaylistController {
+
+ private final PlaylistRepository playlistRepository;
+
+ private final TrackRepository trackRepository;
+
+ public PlaylistController(PlaylistRepository playlistRepository, TrackRepository trackRepository) {
+  this.playlistRepository = playlistRepository;
+  this.trackRepository = trackRepository;
+ }
+
+ @QueryMapping
+ public Optional<Playlist> favoritePlaylist(@Argument String authorName) {
+  return this.playlistRepository.findByAuthorAndNameEquals(authorName, "Favorites");
+ }
+
+ @SchemaMapping
+ Window<Track> tracks(Playlist playlist, ScrollSubrange subrange) {
+  Set<String> trackIds = playlist.getTrackIds();
+  ScrollPosition scrollPosition = subrange.position().orElse(ScrollPosition.offset());
+  Limit limit = Limit.of(subrange.count().orElse(10));
+  return this.trackRepository.findByIdInOrderByTitle(trackIds, scrollPosition, limit);
+ }
+
+}
+----
+
+The `first: Int, last: Int, before: String, after: String` arguments are gathered into a `ScrollSubrange` instance.
+In our controller, we can then get the information about the ids we're interested in and the pagination arguments.
+
+You can run this example by using the following query, first asking for the first 10 elements for the user "bclozel".
+
+[source,graphql]
+----
+{
+  favoritePlaylist(authorName: "bclozel") {
+    id
+    name
+    author
+    tracks(first: 10) {
+      edges {
+        node {
+          id
+          title
+        }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+}
+----
+
+You should get a response similar to:
+
+[source,json]
+----
+{
+ "data": {
+  "favoritePlaylist": {
+   "id": "66029f5c6eba07579da6f800",
+   "name": "Favorites",
+   "author": "bclozel",
+   "tracks": {
+    "edges": [
+     {
+      "node": {
+       "id": "66029f5c6eba07579da6f785",
+       "title": "Coding All Night"
+      },
+      "cursor": "T18x"
+     },
+     {
+      "node": {
+       "id": "66029f5c6eba07579da6f7f1",
+       "title": "Machine Learning"
+      },
+      "cursor": "T18y"
+     },
+     {
+      "node": {
+       "id": "66029f5c6eba07579da6f7bf",
+       "title": "Spirit of Spring"
+      },
+      "cursor": "T18z"
+     },
+     {
+      "node": {
+       "id": "66029f5c6eba07579da6f795",
+       "title": "Spring Break Anthem"
+      },
+      "cursor": "T180"
+     },
+     {
+      "node": {
+       "id": "66029f5c6eba07579da6f7c0",
+       "title": "Spring Comes"
+      },
+      "cursor": "T181"
+     }
+    ],
+    "pageInfo": {
+     "hasNextPage": true
+    }
+   }
+  }
+ }
+}
+----
+
+Each edge provides its own cursor information - this opaque string is decoded by the server and converted into a position in the collection at runtime.
+For example, base64 decoding `"T180"` will result in `"O_4"`, which means the 4th element in offset scrolling.
+This value is not meant to be decoded by the client nor hold any semantic besides a particular cursor position in the collection.
+
+We can then use this cursor information to ask for the 5 next elements after `"T181"` to our API:
+
+[source,graphql]
+----
+{
+  favoritePlaylist(authorName: "bclozel") {
+    id
+    name
+    author
+    tracks(first: 5, after: "T181") {
+      edges {
+        node {
+          id
+          title
+        }
+        cursor
+      }
+      pageInfo {
+        hasNextPage
+      }
+    }
+  }
+}
+----
+
+And we can then expect to get a response like:
+
+[source,json]
+----
+{
+  "data": {
+    "favoritePlaylist": {
+      "id": "66029f5c6eba07579da6f800",
+      "name": "Favorites",
+      "author": "bclozel",
+      "tracks": {
+        "edges": [
+          {
+            "node": {
+              "id": "66029f5c6eba07579da6f7a3",
+              "title": "Spring Has Sprung"
+            },
+            "cursor": "T182"
+          },
+          {
+            "node": {
+              "id": "66029f5c6eba07579da6f7a2",
+              "title": "Spring Rain"
+            },
+            "cursor": "T183"
+          },
+          {
+            "node": {
+              "id": "66029f5c6eba07579da6f766",
+              "title": "Spring Wind Chimes"
+            },
+            "cursor": "T184"
+          },
+          {
+            "node": {
+              "id": "66029f5c6eba07579da6f7d9",
+              "title": "Springsteen"
+            },
+            "cursor": "T185"
+          },
+          {
+            "node": {
+              "id": "66029f5c6eba07579da6f779",
+              "title": "Springtime Again"
+            },
+            "cursor": "T18xMA=="
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": true
+        }
+      }
+    }
+  }
+}
+----
+
+You can https://docs.spring.io/spring-graphql/reference/request-execution.html#execution.pagination[find out more about pagination in the Spring for GraphQL reference documentation].
+
