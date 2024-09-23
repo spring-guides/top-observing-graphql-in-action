@@ -292,7 +292,7 @@ As you can see, the schema and its inline documentation are rendered as navigabl
 The schema really is the key contract with our GraphQL API users.
 
 
-image::{images}/graphiql-album-query.png
+image::{images}/graphiql-album-query.png[]
 
 Choose an album id in the startup logs of your application and use it to send a query with GraphiQL.
 Paste the following query in the left panel and execute the query.
@@ -527,7 +527,7 @@ Now, click on the trace that contains 3 spans. This trace is composed of:
 3. a third span `graphql field album` that shows the GraphQL engine using our data fetcher to get the album information
 
 
-image::{images}/zipkin-album-query.png
+image::{images}/zipkin-album-query.png[]
 
 In the next section, we are going to add more features to our application and see how more complex queries are reflected as traces.
 
@@ -723,7 +723,7 @@ You should get a result similar to this:
 We should now see a trace with 4 spans, 2 of them with our `album` and `tracks` data fetchers.
 
 
-image::{images}/zipkin-album-tracks-query.png
+image::{images}/zipkin-album-tracks-query.png[]
 
 
 == Testing GraphQL Controllers
