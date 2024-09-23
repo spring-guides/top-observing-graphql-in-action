@@ -6,6 +6,7 @@ projects: [spring-boot, spring-graphql]
 :icons: font
 :source-highlighter: prettify
 :project_id: top-observing-graphql-in-action
+:images: https://github.com/spring-guides/top-observing-graphql-in-action/raw/main/images
 
 == What You Will Build
 
@@ -144,7 +145,7 @@ It also contains classes that generate random seed data to work with our applica
 Once the docker daemon is running on your machine, you can first run the project in your IDE or by using `./gradlew :bootRun` on the command line.
 You should see logs showing that a Mongo DB image has been downloaded and a new container has been created before our application starts:
 
-[source]
+[source,bash]
 ----
 INFO 72318 --- [utReader-stderr] o.s.boot.docker.compose.core.DockerCli   :  mongo Pulling
 ...
@@ -161,7 +162,7 @@ INFO 72318 --- [  restartedMain] i.s.g.g.GraphqlMusicApplication          : Star
 
 You should also see random data being generated and saved to the datastore during startup:
 
-[source]
+[source,bash]
 ----
 INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e300', title='Zero and One', genres=[K-Pop (Korean Pop)], artists=[Artist{id='6601e06f454bc9438702e2f6', name='Code Culture'}], releaseDate=2010-02-07, ean='9317657099044', trackIds=[6601e06f454bc9438702e305, 6601e06f454bc9438702e306, 6601e06f454bc9438702e307, 6601e06f454bc9438702e308, 6601e06f454bc9438702e301, 6601e06f454bc9438702e302, 6601e06f454bc9438702e303, 6601e06f454bc9438702e304]}
 INFO 72318 --- [  restartedMain] i.s.g.g.tracks.DemoDataRunner            : Album{id='6601e06f454bc9438702e309', title='Hello World', genres=[Country], artists=[Artist{id='6601e06f454bc9438702e2f6', name='Code Culture'}], releaseDate=2016-07-21, ean='8864328013898', trackIds=[6601e06f454bc9438702e30e, 6601e06f454bc9438702e30f, 6601e06f454bc9438702e30a, 6601e06f454bc9438702e312, 6601e06f454bc9438702e30b, 6601e06f454bc9438702e30c, 6601e06f454bc9438702e30d, 6601e06f454bc9438702e310, 6601e06f454bc9438702e311]}
@@ -231,7 +232,7 @@ spring.graphql.graphiql.enabled=true
 
 You can now start your application. Before we explore our schema with GraphiQL, you should have seen in the CONSOLE the following logs:
 
-[source]
+[source,bash]
 ----
 INFO 65464 --- [  restartedMain] o.s.b.a.g.GraphQlAutoConfiguration       : GraphQL schema inspection:
 	Unmapped fields: {Query=[album]}
@@ -290,8 +291,8 @@ At the top left of the window, you should see a book icon that lets you open the
 As you can see, the schema and its inline documentation are rendered as navigable documentation.
 The schema really is the key contract with our GraphQL API users.
 
-.Sending an "album" query with GraphiQL
-image::./images/graphiql-album-query.png
+
+image::{images}/graphiql-album-query.png
 
 Choose an album id in the startup logs of your application and use it to send a query with GraphiQL.
 Paste the following query in the left panel and execute the query.
@@ -525,8 +526,8 @@ Now, click on the trace that contains 3 spans. This trace is composed of:
 2. a span for the GraphQL request itself, which is tagged as a `MyQuery`
 3. a third span `graphql field album` that shows the GraphQL engine using our data fetcher to get the album information
 
-.Zipkin trace for an "album" query
-image::./images/zipkin-album-query.png
+
+image::{images}/zipkin-album-query.png
 
 In the next section, we are going to add more features to our application and see how more complex queries are reflected as traces.
 
@@ -721,8 +722,8 @@ You should get a result similar to this:
 
 We should now see a trace with 4 spans, 2 of them with our `album` and `tracks` data fetchers.
 
-.Zipkin trace for an "album and tracks" query
-image::./images/zipkin-album-tracks-query.png
+
+image::{images}/zipkin-album-tracks-query.png
 
 
 == Testing GraphQL Controllers
@@ -1177,3 +1178,4 @@ And we can then expect to get a response like:
 
 You can https://docs.spring.io/spring-graphql/reference/request-execution.html#execution.pagination[find out more about pagination in the Spring for GraphQL reference documentation].
 
+Congratulations, you have built this GraphQL API and now better understand how data fetching happens behind the scenes!
