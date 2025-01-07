@@ -358,7 +358,7 @@ Some Scalars are provided by the GraphQL language itself, but you can also defin
 Because scalars are part of our schema, we should define them precisely, ideally pointing to a specification.
 
 For our application, we will use the `Date` and `Url` Scalars provided by the GraphQL Java `graphql-java-extended-scalars` library.
-First, we will need to add it as a dependency to our project:
+First, we will need to ensure that we depend on:
 
 [source,groovy]
 ----
@@ -817,9 +817,9 @@ import org.junit.jupiter.api.Test;
 import org.mockito.BDDMockito;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.graphql.GraphQlTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.graphql.test.tester.GraphQlTester;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.util.Optional;
 
@@ -830,8 +830,11 @@ class PlaylistControllerTests {
  @Autowired
  private GraphQlTester graphQlTester;
 
- @MockBean
+ @MockitoBean
  private PlaylistRepository playlistRepository;
+
+ @MockitoBean
+ private TrackRepository trackRepository
 
  @Test
  void shouldReplyWithFavoritePlaylist() {

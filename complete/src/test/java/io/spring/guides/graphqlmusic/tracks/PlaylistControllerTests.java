@@ -1,16 +1,17 @@
 package io.spring.guides.graphqlmusic.tracks;
 
 
+import java.util.Optional;
+
 import io.spring.guides.graphqlmusic.GraphQlConfiguration;
 import org.junit.jupiter.api.Test;
 import org.mockito.BDDMockito;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.graphql.GraphQlTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.graphql.test.tester.GraphQlTester;
-
-import java.util.Optional;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @GraphQlTest(controllers = PlaylistController.class)
 @Import(GraphQlConfiguration.class)
@@ -19,8 +20,11 @@ class PlaylistControllerTests {
 	@Autowired
 	private GraphQlTester graphQlTester;
 
-	@MockBean
+	@MockitoBean
 	private PlaylistRepository playlistRepository;
+
+	@MockitoBean
+	private TrackRepository trackRepository;
 
 	@Test
 	void shouldReplyWithFavoritePlaylist() {
