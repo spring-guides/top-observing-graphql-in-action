@@ -68,6 +68,6 @@ public class DemoDataRunner implements ApplicationRunner {
                 .getConverter().getMappingContext();
         IndexResolver resolver = new MongoPersistentEntityIndexResolver(mappingContext);
         IndexOperations indexOperations = mongoTemplate.indexOps(entityClass);
-        resolver.resolveIndexFor(entityClass).forEach(indexOperations::ensureIndex);
+        resolver.resolveIndexFor(entityClass).forEach(indexOperations::createIndex);
     }
 }
