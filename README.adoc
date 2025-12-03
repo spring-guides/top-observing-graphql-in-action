@@ -362,7 +362,7 @@ First, we will need to ensure that we depend on:
 
 [source,groovy]
 ----
-implementation 'com.graphql-java:graphql-java-extended-scalars:22.0'
+implementation 'com.graphql-java:graphql-java-extended-scalars:24.0'
 ----
 
 Our application already contains a `DurationSecondsScalar` implementation that shows how you can implement a custom Scalar for `Duration`.
@@ -458,20 +458,21 @@ In the next section, we will use Observability features to better understand wha
 
 == Enable Observations
 
-With Spring Boot 3.0 and Spring Framework 6.0, the Spring team has completely revisited the Observability story in Spring applications.
-Observability is now built-in Spring libraries, providing you with metrics and traces for Spring MVC requests, Spring Batch jobs, Spring Security infrastructure, etc.
+Observability is built-in Spring libraries, providing you with metrics and traces for Spring MVC requests, Spring Batch jobs, Spring Security infrastructure, etc.
 
 Observations are recorded at runtime and can produce metrics and traces depending on the application configuration.
 They are generally used for investigating production and performance issues in distributed systems.
 Here, we are going to use them to visualize how GraphQL requests are handled and data fetching operations distributed.
 
-First, let's add *Spring Boot Actuator*, *Micrometer Tracing* and *Zipkin* to our `build.gradle`:
+First, let's add *Micrometer Tracing* and *Zipkin* to our `build.gradle`:
 
 [source,groovy]
 ----
-	implementation 'org.springframework.boot:spring-boot-starter-actuator'
-	implementation 'io.micrometer:micrometer-tracing-bridge-brave'
-	implementation 'io.zipkin.reporter2:zipkin-reporter-brave'
+	implementation 'org.springframework.boot:spring-boot-micrometer-tracing'
+	implementation 'org.springframework.boot:spring-boot-starter-zipkin'
+
+	testImplementation 'org.springframework.boot:spring-boot-micrometer-tracing-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-zipkin-test'
 ----
 
 We will also need to update our `compose.yaml` file to also create a new Zipkin container to collect the recorded traces:
@@ -812,11 +813,14 @@ Our test mocks the expected behavior of our `PlaylistRepository` as we declare i
 package io.spring.guides.graphqlmusic.tracks;
 
 
+import java.util.Optional;
+
 import io.spring.guides.graphqlmusic.GraphQlConfiguration;
 import org.junit.jupiter.api.Test;
 import org.mockito.BDDMockito;
+
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.graphql.GraphQlTest;
+import org.springframework.boot.graphql.test.autoconfigure.GraphQlTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.graphql.test.tester.GraphQlTester;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;

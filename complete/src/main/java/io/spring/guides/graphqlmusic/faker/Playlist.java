@@ -46,11 +46,11 @@ class Playlist extends AbstractProvider<BaseProviders> {
     }
 
     public LocalDate releaseDate() {
-        return LocalDate.parse(this.faker.date().past(365 * 20, TimeUnit.DAYS, "YYYY-MM-dd"));
+        return LocalDate.parse(this.faker.timeAndDate().past(365 * 20, TimeUnit.DAYS, "YYYY-MM-dd"));
     }
 
     public Duration trackDuration() {
-        return this.faker.date().duration(2*60, 4*60, ChronoUnit.SECONDS);
+        return this.faker.timeAndDate().duration(2*60, 4*60, ChronoUnit.SECONDS);
     }
 
     public int trackRating() {
